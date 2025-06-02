@@ -89,3 +89,14 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
             -d "$(jq -nc --arg body "$COMMENT_BODY" '{body: $body}')"
+
+      - name: Request changes if validation fails
+        if: steps.changed.outputs.only_data_json == 'true' && failure()
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          REVIEW_BODY=$(<.github/approve-data-json-request-changes.md)
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews \
+            -d "$(jq -nc --arg body "$REVIEW_BODY" --arg event "REQUEST_CHANGES" '{body: $body, event: $event}')"
