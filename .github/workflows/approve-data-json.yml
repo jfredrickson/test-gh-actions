@@ -1,0 +1,91 @@
+name: Validate and approve data.json PRs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  permissions:
+    pull-requests: write
+    contents: read
+
+  approve-data-json:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if only data.json changed
+        id: changed
+        run: |
+          FILES=$(git diff --name-only --diff-filter=AM origin/${{ github.event.pull_request.base.ref }}...HEAD)
+          echo "Changed files:"
+          echo "$FILES"
+
+          COUNT=$(echo "$FILES" | wc -l)
+          if [ "$COUNT" -ne 1 ]; then
+            echo "More than one file changed."
+            echo "only_data_json=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if echo "$FILES" | grep -q "^data.json$"; then
+            echo "Only the target JSON file changed."
+            echo "only_data_json=true" >> $GITHUB_OUTPUT
+          else
+            echo "Different file modified."
+            echo "only_data_json=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Switch to base branch for validation script
+        if: steps.changed.outputs.only_data_json == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+
+      - name: Restore data.json from PR for validation
+        if: steps.changed.outputs.only_data_json == 'true'
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }} -- data.json
+
+      - name: Ensure data.json is not a symlink
+        if: steps.changed.outputs.only_data_json == 'true'
+        run: |
+          if [ -L data.json ]; then
+            echo "data.json is a symlink, quitting!"
+            exit 1
+          fi
+
+      - name: Validate JSON schema
+        if: steps.changed.outputs.only_data_json == 'true'
+        run: |
+          pip install jsonschema
+          python scripts/validate.py
+        env:
+          FILE_PATH: data.json
+          SCHEMA_PATH: dcat-us-schema-v1.1.json
+
+      - name: Approve PR
+        if: steps.changed.outputs.only_data_json == 'true' && success()
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+            -d '{"event":"APPROVE"}'
+
+      - name: Comment on PR with approval reason
+        if: steps.changed.outputs.only_data_json == 'true' && success()
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          COMMENT_BODY=$(<.github/approve-data-json-comment.md)
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments \
+            -d "$(jq -nc --arg body "$COMMENT_BODY" '{body: $body}')"
