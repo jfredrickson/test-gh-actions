@@ -65,7 +65,7 @@ jobs:
         if: steps.changed.outputs.only_data_json == 'true'
         run: |
           pip install jsonschema
-          python scripts/validate.py
+          python scripts/validate-json.py
         env:
           FILE_PATH: data.json
           SCHEMA_PATH: dcat-us-schema-v1.1.json
